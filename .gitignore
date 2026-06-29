@@ -1,0 +1,8 @@
+# Build artifacts
+/dist/
+/clipboard-bridge
+
+# Go
+*.test
+*.out
+coverage.txt
