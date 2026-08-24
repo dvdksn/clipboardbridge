@@ -33,10 +33,17 @@ const defaultProxyClipboardURL = "http://gateway.docker.internal:3128/_sbx/clipb
 // clipboard endpoint other than the Docker Sandboxes default.
 const proxyURLEnv = "CLIPBOARD_BRIDGE_PROXY_URL"
 
+// hostSessionIDEnv is the opaque per-attach session ID the sandbox injects into
+// an interactive session's environment. We relay it as session_id so the host
+// resolves which graphical session to read from. Empty when the bridge was not
+// started from an attach.
+const hostSessionIDEnv = "SBX_HOST_SESSION_ID"
+
 // hostEnvKeys map each graphical-session variable to the SBX_HOST_* environment
-// variable that carries its host value into the sandbox. When set, we forward
-// them to the clipboard endpoint so the host reads from the caller's session
-// rather than a different one (matters over SSH).
+// variable that carries its host value into the sandbox. Superseded by
+// hostSessionIDEnv and sent alongside it, so one binary serves an endpoint on
+// either scheme; the sandbox sets one or the other, never both, so only one is
+// ever populated. Removable once nothing reads host_env.
 var hostEnvKeys = map[string]string{
 	"DISPLAY":                  "SBX_HOST_DISPLAY",
 	"XAUTHORITY":               "SBX_HOST_XAUTHORITY",
@@ -83,9 +90,10 @@ func (p *proxyClipboard) imagePNG(ctx context.Context) ([]byte, error) {
 		}
 	}
 	reqBody, err := json.Marshal(struct {
-		Type    string            `json:"type"`
-		HostEnv map[string]string `json:"host_env,omitempty"`
-	}{Type: clipboardImageType, HostEnv: hostEnv})
+		Type      string            `json:"type"`
+		SessionID string            `json:"session_id,omitempty"`
+		HostEnv   map[string]string `json:"host_env,omitempty"`
+	}{Type: clipboardImageType, SessionID: os.Getenv(hostSessionIDEnv), HostEnv: hostEnv})
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
