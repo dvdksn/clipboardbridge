@@ -14,17 +14,24 @@ import (
 )
 
 // TestProxyClipboardRequestBody pins the request the bridge sends against each
-// environment the sandbox can hand it: the session ID relayed as session_id,
-// the older SBX_HOST_* values as host_env, and neither when the bridge was not
-// started from an attach.
+// environment the sandbox can hand it: the session resolved from the client,
+// the bridge's own SBX_HOST_SESSION_ID as a fallback, the older SBX_HOST_*
+// values as host_env, and none of them when there is no session to be had.
 func TestProxyClipboardRequestBody(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		env  map[string]string
-		want map[string]any
+		name      string
+		sessionID string
+		env       map[string]string
+		want      map[string]any
 	}{
 		{
-			name: "relays the session id",
+			name:      "prefers the session resolved from the client",
+			sessionID: "sess-from-peer",
+			env:       map[string]string{hostSessionIDEnv: "sess-from-own-env"},
+			want:      map[string]any{"type": clipboardImageType, "session_id": "sess-from-peer"},
+		},
+		{
+			name: "falls back to the bridge's own session id",
 			env:  map[string]string{hostSessionIDEnv: "sess-token-123"},
 			want: map[string]any{"type": clipboardImageType, "session_id": "sess-token-123"},
 		},
@@ -63,7 +70,7 @@ func TestProxyClipboardRequestBody(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			_, err := newProxyClipboard().imagePNG(context.Background())
+			_, err := newProxyClipboard().imagePNG(context.Background(), tc.sessionID)
 
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)

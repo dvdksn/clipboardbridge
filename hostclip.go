@@ -57,8 +57,9 @@ var hostEnvKeys = map[string]string{
 type hostClipboard interface {
 	// imagePNG returns the host clipboard image as PNG bytes, or an empty
 	// slice when the host clipboard holds no image. A nil error with empty
-	// bytes means "no image", not a failure.
-	imagePNG(ctx context.Context) ([]byte, error)
+	// bytes means "no image", not a failure. sessionID names the sandbox
+	// attach to read from, empty when the caller could not resolve one.
+	imagePNG(ctx context.Context, sessionID string) ([]byte, error)
 }
 
 // proxyClipboard is the production hostClipboard backed by the sandbox proxy.
@@ -82,7 +83,12 @@ func newProxyClipboard() *proxyClipboard {
 	}
 }
 
-func (p *proxyClipboard) imagePNG(ctx context.Context) ([]byte, error) {
+func (p *proxyClipboard) imagePNG(ctx context.Context, sessionID string) ([]byte, error) {
+	if sessionID == "" {
+		// No session from the client. A manually launched bridge inherits one
+		// from the attach that started it, so fall back to our own environment.
+		sessionID = os.Getenv(hostSessionIDEnv)
+	}
 	hostEnv := map[string]string{}
 	for hostKey, envKey := range hostEnvKeys {
 		if v := os.Getenv(envKey); v != "" {
@@ -93,7 +99,7 @@ func (p *proxyClipboard) imagePNG(ctx context.Context) ([]byte, error) {
 		Type      string            `json:"type"`
 		SessionID string            `json:"session_id,omitempty"`
 		HostEnv   map[string]string `json:"host_env,omitempty"`
-	}{Type: clipboardImageType, SessionID: os.Getenv(hostSessionIDEnv), HostEnv: hostEnv})
+	}{Type: clipboardImageType, SessionID: sessionID, HostEnv: hostEnv})
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
