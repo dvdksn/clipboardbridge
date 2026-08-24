@@ -3,6 +3,7 @@
 package clipboardbridge
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -68,5 +69,23 @@ func TestReadSessionIDFromProcessRejects(t *testing.T) {
 	t.Run("a process owned by another user", func(t *testing.T) {
 		_, err := readSessionIDFromProcess(int32(os.Getpid()), self+1)
 		require.ErrorContains(t, err, "owned by uid")
+	})
+}
+
+func TestSessionIDFromEnvironReaderRejectsOversize(t *testing.T) {
+	// A block one byte past the cap is rejected rather than truncated: a cut
+	// landing mid-value would otherwise produce a plausible-looking partial id.
+	block := bytes.Repeat([]byte("PADDING=x\x00"), (maxEnvironBytes/10)+1)
+	require.Greater(t, len(block), maxEnvironBytes)
+
+	_, err := sessionIDFromEnvironReader(bytes.NewReader(block))
+	require.ErrorContains(t, err, "exceeds")
+
+	t.Run("and accepts a block at the cap", func(t *testing.T) {
+		entry := []byte(hostSessionIDEnv + "=sess-ok\x00")
+		padded := append(bytes.Repeat([]byte{0}, maxEnvironBytes-len(entry)), entry...)
+		got, err := sessionIDFromEnvironReader(bytes.NewReader(padded))
+		require.NoError(t, err)
+		require.Equal(t, "sess-ok", got)
 	})
 }

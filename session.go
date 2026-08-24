@@ -21,6 +21,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// hostSessionIDEnv is the opaque per-attach session ID the sandbox puts in an
+// interactive session's environment. The bridge reads it from the client that
+// asks for a paste, never from its own environment, and relays it as
+// session_id.
+const hostSessionIDEnv = "SBX_HOST_SESSION_ID"
+
 // maxEnvironBytes caps how much of a client's environment block we read. The
 // kernel already bounds a process's environment well below this; the cap is
 // here so a corrupt or hostile /proc entry cannot make the bridge allocate
@@ -75,9 +81,25 @@ func readSessionIDFromProcess(pid int32, expectedUID uint32) (string, error) {
 	f := os.NewFile(uintptr(envFD), "environ")
 	defer f.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(f, maxEnvironBytes))
+	id, err := sessionIDFromEnvironReader(f)
 	if err != nil {
-		return "", fmt.Errorf("read /proc/%d/environ: %w", pid, err)
+		return "", fmt.Errorf("/proc/%d/environ: %w", pid, err)
+	}
+	return id, nil
+}
+
+// sessionIDFromEnvironReader reads an environment block and extracts the
+// session ID. It reads one byte past maxEnvironBytes so an oversized block is
+// rejected outright rather than silently truncated: a cut landing mid-value
+// would otherwise yield a partial id that looks well-formed here and only
+// fails to resolve later.
+func sessionIDFromEnvironReader(r io.Reader) (string, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, maxEnvironBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read: %w", err)
+	}
+	if len(raw) > maxEnvironBytes {
+		return "", fmt.Errorf("environment exceeds %d bytes", maxEnvironBytes)
 	}
 	return sessionIDFromEnviron(raw)
 }

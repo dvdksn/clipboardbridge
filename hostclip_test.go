@@ -25,15 +25,17 @@ func TestProxyClipboardRequestBody(t *testing.T) {
 		want      map[string]any
 	}{
 		{
-			name:      "prefers the session resolved from the client",
+			name:      "sends the session resolved from the client",
 			sessionID: "sess-from-peer",
 			env:       map[string]string{hostSessionIDEnv: "sess-from-own-env"},
 			want:      map[string]any{"type": clipboardImageType, "session_id": "sess-from-peer"},
 		},
 		{
-			name: "falls back to the bridge's own session id",
-			env:  map[string]string{hostSessionIDEnv: "sess-token-123"},
-			want: map[string]any{"type": clipboardImageType, "session_id": "sess-token-123"},
+			// Substituting our own session here would serve one session's
+			// clipboard to a client from another.
+			name: "never substitutes the bridge's own session id",
+			env:  map[string]string{hostSessionIDEnv: "sess-from-own-env"},
+			want: map[string]any{"type": clipboardImageType},
 		},
 		{
 			name: "falls back to host_env for a sandbox that names the session itself",

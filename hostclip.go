@@ -33,12 +33,6 @@ const defaultProxyClipboardURL = "http://gateway.docker.internal:3128/_sbx/clipb
 // clipboard endpoint other than the Docker Sandboxes default.
 const proxyURLEnv = "CLIPBOARD_BRIDGE_PROXY_URL"
 
-// hostSessionIDEnv is the opaque per-attach session ID the sandbox injects into
-// an interactive session's environment. We relay it as session_id so the host
-// resolves which graphical session to read from. Empty when the bridge was not
-// started from an attach.
-const hostSessionIDEnv = "SBX_HOST_SESSION_ID"
-
 // hostEnvKeys map each graphical-session variable to the SBX_HOST_* environment
 // variable that carries its host value into the sandbox. Superseded by
 // hostSessionIDEnv and sent alongside it, so one binary serves an endpoint on
@@ -84,11 +78,10 @@ func newProxyClipboard() *proxyClipboard {
 }
 
 func (p *proxyClipboard) imagePNG(ctx context.Context, sessionID string) ([]byte, error) {
-	if sessionID == "" {
-		// No session from the client. A manually launched bridge inherits one
-		// from the attach that started it, so fall back to our own environment.
-		sessionID = os.Getenv(hostSessionIDEnv)
-	}
+	// sessionID comes from the client and is used as given. Substituting our
+	// own would mean a bridge launched from one session serving that session's
+	// clipboard to a client from another — the cross-session read that
+	// resolving per client exists to prevent. No session means no session.
 	hostEnv := map[string]string{}
 	for hostKey, envKey := range hostEnvKeys {
 		if v := os.Getenv(envKey); v != "" {
