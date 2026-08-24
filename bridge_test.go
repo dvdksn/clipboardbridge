@@ -14,13 +14,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// stubClipboard is a hostClipboard returning fixed bytes.
+// stubClipboard is a hostClipboard returning fixed bytes. sawSessionID, when
+// set, records the session id the server resolved for the connection.
 type stubClipboard struct {
-	data []byte
-	err  error
+	data         []byte
+	err          error
+	sawSessionID *string
 }
 
-func (s stubClipboard) imagePNG(context.Context) ([]byte, error) { return s.data, s.err }
+func (s stubClipboard) imagePNG(_ context.Context, sessionID string) ([]byte, error) {
+	if s.sawSessionID != nil {
+		*s.sawSessionID = sessionID
+	}
+	return s.data, s.err
+}
 
 // fakeClient drives the client side of the data-control protocol over a unix
 // socket, reusing the package's own wire codec.
@@ -58,7 +65,10 @@ func (f *fakeClient) readUntil(objectID uint32, opcode uint16) *message {
 	}
 }
 
-func newTestServer(t *testing.T, host hostClipboard) *fakeClient {
+// newTestServer starts a server on one end of a socketpair. resolve overrides
+// how the connection's sandbox session is identified; the default reports none,
+// since an in-process client has no attach behind it.
+func newTestServer(t *testing.T, host hostClipboard, resolve ...func(*net.UnixConn) (string, error)) *fakeClient {
 	t.Helper()
 	// A connected socketpair avoids the OS-specific limit on unix socket path
 	// length (the macOS temp dir alone can exceed it).
@@ -68,6 +78,10 @@ func newTestServer(t *testing.T, host hostClipboard) *fakeClient {
 	cliConn := fileConnUnix(t, fds[1], "cli")
 
 	srv := newServer(host, nil)
+	srv.resolveSession = func(*net.UnixConn) (string, error) { return "", nil }
+	if len(resolve) > 0 {
+		srv.resolveSession = resolve[0]
+	}
 	go srv.serve(context.Background(), srvConn)
 	t.Cleanup(func() { _ = cliConn.Close() })
 	return &fakeClient{t: t, uc: cliConn, c: newConn(cliConn)}
@@ -245,4 +259,18 @@ func TestWireSync_RepliesDoneAndDeleteID(t *testing.T) {
 	gotID, ok := dr.uint32()
 	require.True(t, ok)
 	require.Equal(t, uint32(cb), gotID)
+}
+
+// TestPasteFlow_UsesClientSession checks the session resolved for a connection
+// reaches the host clipboard fetch, so a paste is read from the attach that
+// asked for it rather than from whatever the bridge itself was started with.
+func TestPasteFlow_UsesClientSession(t *testing.T) {
+	var saw string
+	png := []byte("\x89PNG\r\n\x1a\nHELLO")
+	f := newTestServer(t, stubClipboard{data: png, sawSessionID: &saw},
+		func(*net.UnixConn) (string, error) { return "sess-from-client", nil })
+	f.handshake()
+	f.readUntil(clDevice, deviceEvtSelection)
+
+	require.Equal(t, "sess-from-client", saw)
 }

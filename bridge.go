@@ -101,27 +101,35 @@ const (
 type server struct {
 	host hostClipboard
 	log  *slog.Logger
+	// resolveSession identifies the sandbox attach behind a client connection.
+	// A field rather than a direct call so tests can drive the protocol in one
+	// process; the real lookup needs the client to be a separate one.
+	resolveSession func(*net.UnixConn) (string, error)
 }
 
 func newServer(host hostClipboard, log *slog.Logger) *server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &server{host: host, log: log}
+	return &server{host: host, log: log, resolveSession: sessionIDForPeer}
 }
 
-// connState is the per-connection object table and id allocator.
+// connState is the per-connection object table and id allocator. It also
+// carries the sandbox session resolved from this client, so concurrent attaches
+// read their own host clipboard rather than a shared one.
 type connState struct {
 	objects   map[uint32]objKind
 	offerData map[uint32][]byte // cached host bytes per advertised offer
 	nextID    uint32
+	sessionID string // "" when the client's session could not be resolved
 }
 
-func newConnState() *connState {
+func newConnState(sessionID string) *connState {
 	return &connState{
 		objects:   map[uint32]objKind{displayID: kindDisplay},
 		offerData: map[uint32][]byte{},
 		nextID:    serverIDBase,
+		sessionID: sessionID,
 	}
 }
 
@@ -137,7 +145,15 @@ func (st *connState) allocID() uint32 {
 func (s *server) serve(ctx context.Context, uc *net.UnixConn) {
 	defer uc.Close()
 	c := newConn(uc)
-	st := newConnState()
+	// Resolve the client's session once, at accept: the peer credentials are
+	// fixed for the life of the connection. A failure is not fatal — the fetch
+	// falls back to our own environment, and failing that reads as an empty
+	// clipboard. The id itself is a capability and is never logged.
+	sessionID, err := s.resolveSession(uc)
+	if err != nil {
+		s.log.Debug("clipboard-bridge: no session for peer", "error", err)
+	}
+	st := newConnState(sessionID)
 	for {
 		m, err := c.readMessage()
 		if err != nil {
@@ -325,7 +341,7 @@ func (s *server) onOffer(c *conn, st *connState, m *message) error {
 // advertiseSelection reads the host clipboard once and tells the client what's
 // available: an image/png offer when present, or selection(null) when empty.
 func (s *server) advertiseSelection(ctx context.Context, c *conn, st *connState, device uint32) error {
-	data, err := s.host.imagePNG(ctx)
+	data, err := s.host.imagePNG(ctx, st.sessionID)
 	if err != nil {
 		s.log.Debug("clipboard-bridge: host clipboard read failed", "error", err)
 		data = nil

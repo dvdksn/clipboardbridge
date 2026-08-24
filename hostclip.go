@@ -33,12 +33,6 @@ const defaultProxyClipboardURL = "http://gateway.docker.internal:3128/_sbx/clipb
 // clipboard endpoint other than the Docker Sandboxes default.
 const proxyURLEnv = "CLIPBOARD_BRIDGE_PROXY_URL"
 
-// hostSessionIDEnv is the opaque per-attach session ID the sandbox injects into
-// an interactive session's environment. We relay it as session_id so the host
-// resolves which graphical session to read from. Empty when the bridge was not
-// started from an attach.
-const hostSessionIDEnv = "SBX_HOST_SESSION_ID"
-
 // hostEnvKeys map each graphical-session variable to the SBX_HOST_* environment
 // variable that carries its host value into the sandbox. Superseded by
 // hostSessionIDEnv and sent alongside it, so one binary serves an endpoint on
@@ -57,8 +51,9 @@ var hostEnvKeys = map[string]string{
 type hostClipboard interface {
 	// imagePNG returns the host clipboard image as PNG bytes, or an empty
 	// slice when the host clipboard holds no image. A nil error with empty
-	// bytes means "no image", not a failure.
-	imagePNG(ctx context.Context) ([]byte, error)
+	// bytes means "no image", not a failure. sessionID names the sandbox
+	// attach to read from, empty when the caller could not resolve one.
+	imagePNG(ctx context.Context, sessionID string) ([]byte, error)
 }
 
 // proxyClipboard is the production hostClipboard backed by the sandbox proxy.
@@ -82,7 +77,11 @@ func newProxyClipboard() *proxyClipboard {
 	}
 }
 
-func (p *proxyClipboard) imagePNG(ctx context.Context) ([]byte, error) {
+func (p *proxyClipboard) imagePNG(ctx context.Context, sessionID string) ([]byte, error) {
+	// sessionID comes from the client and is used as given. Substituting our
+	// own would mean a bridge launched from one session serving that session's
+	// clipboard to a client from another — the cross-session read that
+	// resolving per client exists to prevent. No session means no session.
 	hostEnv := map[string]string{}
 	for hostKey, envKey := range hostEnvKeys {
 		if v := os.Getenv(envKey); v != "" {
@@ -93,7 +92,7 @@ func (p *proxyClipboard) imagePNG(ctx context.Context) ([]byte, error) {
 		Type      string            `json:"type"`
 		SessionID string            `json:"session_id,omitempty"`
 		HostEnv   map[string]string `json:"host_env,omitempty"`
-	}{Type: clipboardImageType, SessionID: os.Getenv(hostSessionIDEnv), HostEnv: hostEnv})
+	}{Type: clipboardImageType, SessionID: sessionID, HostEnv: hostEnv})
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
